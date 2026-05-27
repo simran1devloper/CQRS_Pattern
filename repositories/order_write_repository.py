@@ -1,9 +1,9 @@
-# repositories/order_repository.py
+# repositories/order_write_repository.py
 
 from models.order import Order
 
 
-class OrderRepository:
+class OrderWriteRepository:
     def __init__(self):
         self.orders = []
         self.current_id = 1
@@ -27,13 +27,6 @@ class OrderRepository:
                 return order
 
         return None
-
-    def get_by_customer_id(self, customer_id: int):
-        return [
-            order
-            for order in self.orders
-            if order.customer_id == customer_id
-        ]
 
     def update_status(self, order_id: int, status: str):
         order = self.get_by_id(order_id)

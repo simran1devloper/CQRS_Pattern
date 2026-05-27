@@ -2,10 +2,10 @@
 
 
 class ListOrdersByCustomerHandler:
-    def __init__(self, order_repository):
-        self.order_repository = order_repository
+    def __init__(self, order_read_repository):
+        self.order_read_repository = order_read_repository
 
     def handle(self, query):
-        orders = self.order_repository.get_by_customer_id(query.customer_id)
+        orders = self.order_read_repository.get_by_customer_id(query.customer_id)
 
         return orders

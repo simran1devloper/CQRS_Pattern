@@ -5,7 +5,11 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from repositories.order_repository import OrderRepository
+from infrastructure.event_bus import EventBus
+from infrastructure.message_broker import InMemoryMessageBroker
+from projections.order_projection_handler import OrderProjectionHandler
+from repositories.order_read_repository import OrderReadRepository
+from repositories.order_write_repository import OrderWriteRepository
 
 from commands.cancel_order_command import CancelOrderCommand
 from commands.cancel_order_handler import CancelOrderHandler
@@ -22,7 +26,14 @@ from queries.list_orders_by_customer_handler import ListOrdersByCustomerHandler
 
 app = FastAPI(title="Order Management CQRS API")
 
-order_repository = OrderRepository()
+message_broker = InMemoryMessageBroker()
+event_bus = EventBus(message_broker)
+
+order_write_repository = OrderWriteRepository()
+order_read_repository = OrderReadRepository()
+
+order_projection_handler = OrderProjectionHandler(order_read_repository)
+event_bus.subscribe(order_projection_handler.handle)
 
 OrderStatus = Literal["CREATED", "CONFIRMED", "SHIPPED", "DELIVERED", "CANCELLED"]
 
@@ -43,7 +54,7 @@ def create_order(request: CreateOrderRequest):
         items=request.items
     )
 
-    handler = CreateOrderHandler(order_repository)
+    handler = CreateOrderHandler(order_write_repository, event_bus)
     order = handler.handle(command)
 
     return {
@@ -59,7 +70,7 @@ def update_order_status(order_id: int, request: UpdateOrderStatusRequest):
         status=request.status
     )
 
-    handler = UpdateOrderStatusHandler(order_repository)
+    handler = UpdateOrderStatusHandler(order_write_repository, event_bus)
     order = handler.handle(command)
 
     if order is None:
@@ -75,7 +86,7 @@ def update_order_status(order_id: int, request: UpdateOrderStatusRequest):
 def cancel_order(order_id: int):
     command = CancelOrderCommand(order_id=order_id)
 
-    handler = CancelOrderHandler(order_repository)
+    handler = CancelOrderHandler(order_write_repository, event_bus)
     order = handler.handle(command)
 
     if order is None:
@@ -91,7 +102,7 @@ def cancel_order(order_id: int):
 def get_order(order_id: int):
     query = GetOrderQuery(order_id=order_id)
 
-    handler = GetOrderHandler(order_repository)
+    handler = GetOrderHandler(order_read_repository)
     order = handler.handle(query)
 
     if order is None:
@@ -104,7 +115,12 @@ def get_order(order_id: int):
 def list_orders_by_customer(customer_id: int):
     query = ListOrdersByCustomerQuery(customer_id=customer_id)
 
-    handler = ListOrdersByCustomerHandler(order_repository)
+    handler = ListOrdersByCustomerHandler(order_read_repository)
     orders = handler.handle(query)
 
     return orders
+
+
+@app.get("/broker/events")
+def list_published_events():
+    return event_bus.get_published_events()

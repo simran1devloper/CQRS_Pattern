@@ -1,22 +1,19 @@
-# Order Management CQRS API
+# CQRS + Event-Driven Order Management API
 
-A backend project that demonstrates the **CQRS Design Pattern** using **Python** and **FastAPI**.
+A backend project that demonstrates **CQRS** and **event-driven architecture** using **Python** and **FastAPI**.
 
-This project separates write operations from read operations by using:
-
-- **Commands** for actions that change order data
-- **Queries** for actions that read order data
-- **Handlers** to execute each command or query
-- **Repository** to manage order storage
+This project separates write operations from read operations and connects both sides through an in-memory **Event Bus / Message Broker**.
 
 ## Features
 
 - Create order
 - Update order status
 - Cancel order
-- Get order by ID
-- List orders by customer
-- Clear separation between command side and query side
+- Publish domain events after write operations
+- Project events into a separate read model
+- Get order by ID from the read side
+- List orders by customer from the read side
+- Inspect published broker events
 
 ## Tech Stack
 
@@ -25,82 +22,72 @@ This project separates write operations from read operations by using:
 - Pydantic
 - Uvicorn
 - CQRS Pattern
+- Event Bus
+- Message Broker
+- Projection Handler
 - Repository Pattern
 
-## CQRS Flow Diagram
+## Architecture Flow
 
 ```mermaid
 flowchart TD
-    Client[API Client / Swagger UI]
+    Client[Client / Swagger UI]
     API[FastAPI Routes]
 
     Client --> API
 
-    API --> CommandSide[Command Side]
-    API --> QuerySide[Query Side]
+    API --> WriteSide[Write Side]
+    API --> ReadSide[Read Side]
 
-    CommandSide --> CreateCommand[CreateOrderCommand]
-    CommandSide --> UpdateCommand[UpdateOrderStatusCommand]
-    CommandSide --> CancelCommand[CancelOrderCommand]
+    WriteSide --> Commands[Commands]
+    Commands --> CommandHandlers[Command Handlers]
+    CommandHandlers --> WriteRepo[OrderWriteRepository]
+    WriteRepo --> WriteStore[Write Model]
 
-    CreateCommand --> CreateHandler[CreateOrderHandler]
-    UpdateCommand --> UpdateHandler[UpdateOrderStatusHandler]
-    CancelCommand --> CancelHandler[CancelOrderHandler]
+    CommandHandlers --> Events[Domain Events]
+    Events --> EventBus[Event Bus]
+    EventBus --> Broker[In-Memory Message Broker]
 
-    QuerySide --> GetQuery[GetOrderQuery]
-    QuerySide --> ListQuery[ListOrdersByCustomerQuery]
+    Broker --> ProjectionHandler[OrderProjectionHandler]
+    ProjectionHandler --> ReadRepo[OrderReadRepository]
+    ReadRepo --> ReadStore[Read Model]
 
-    GetQuery --> GetHandler[GetOrderHandler]
-    ListQuery --> ListHandler[ListOrdersByCustomerHandler]
-
-    CreateHandler --> Repository[OrderRepository]
-    UpdateHandler --> Repository
-    CancelHandler --> Repository
-    GetHandler --> Repository
-    ListHandler --> Repository
-
-    Repository --> Store[In-Memory Order Store]
+    ReadSide --> Queries[Queries]
+    Queries --> QueryHandlers[Query Handlers]
+    QueryHandlers --> ReadRepo
 ```
 
-## Request Flow
-
-### Command Flow
+## Event Flow
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant API as FastAPI Route
-    participant Command
-    participant Handler
-    participant Repository
+    participant CommandHandler
+    participant WriteRepo as Write Repository
+    participant EventBus
+    participant Broker as Message Broker
+    participant Projection as Projection Handler
+    participant ReadRepo as Read Repository
 
     Client->>API: POST /orders
-    API->>Command: CreateOrderCommand
-    API->>Handler: CreateOrderHandler
-    Handler->>Repository: save order
-    Repository-->>Handler: created order
-    Handler-->>API: order
-    API-->>Client: success response
+    API->>CommandHandler: CreateOrderCommand
+    CommandHandler->>WriteRepo: save order
+    WriteRepo-->>CommandHandler: created order
+    CommandHandler->>EventBus: publish OrderCreatedEvent
+    EventBus->>Broker: send event
+    Broker->>Projection: deliver event
+    Projection->>ReadRepo: update read model
+    API-->>Client: created order response
 ```
 
-### Query Flow
+## Events
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as FastAPI Route
-    participant Query
-    participant Handler
-    participant Repository
-
-    Client->>API: GET /orders/{order_id}
-    API->>Query: GetOrderQuery
-    API->>Handler: GetOrderHandler
-    Handler->>Repository: get_by_id
-    Repository-->>Handler: order
-    Handler-->>API: order
-    API-->>Client: order response
-```
+| Event | Published When |
+| --- | --- |
+| `OrderCreatedEvent` | A new order is created |
+| `OrderStatusUpdatedEvent` | An order status is changed |
+| `OrderCancelledEvent` | An order is cancelled |
 
 ## Project Structure
 
@@ -113,15 +100,23 @@ CQRS_pattern/
 |   |-- create_order_handler.py
 |   |-- update_order_status_command.py
 |   `-- update_order_status_handler.py
+|-- events/
+|   `-- order_events.py
+|-- infrastructure/
+|   |-- event_bus.py
+|   `-- message_broker.py
 |-- models/
 |   `-- order.py
+|-- projections/
+|   `-- order_projection_handler.py
 |-- queries/
 |   |-- get_order_handler.py
 |   |-- get_order_query.py
 |   |-- list_orders_by_customer_handler.py
 |   `-- list_orders_by_customer_query.py
 |-- repositories/
-|   `-- order_repository.py
+|   |-- order_read_repository.py
+|   `-- order_write_repository.py
 |-- main.py
 |-- requirements.txt
 `-- README.md
@@ -129,13 +124,14 @@ CQRS_pattern/
 
 ## API Endpoints
 
-| Method | Endpoint | Purpose | CQRS Side |
+| Method | Endpoint | Purpose | Side |
 | --- | --- | --- | --- |
 | `POST` | `/orders` | Create a new order | Command |
 | `PATCH` | `/orders/{order_id}/status` | Update order status | Command |
 | `POST` | `/orders/{order_id}/cancel` | Cancel an order | Command |
 | `GET` | `/orders/{order_id}` | Get order by ID | Query |
 | `GET` | `/customers/{customer_id}/orders` | List orders by customer | Query |
+| `GET` | `/broker/events` | Inspect published events | Eventing |
 
 ## Run the Project
 
@@ -167,6 +163,8 @@ curl -X POST http://127.0.0.1:8000/orders \
   -d '{"customer_id": 101, "items": ["Laptop", "Mouse"]}'
 ```
 
+This writes to the write repository and publishes `OrderCreatedEvent`.
+
 ### Update Order Status
 
 ```bash
@@ -175,11 +173,15 @@ curl -X PATCH http://127.0.0.1:8000/orders/1/status \
   -d '{"status": "CONFIRMED"}'
 ```
 
+This updates the write model and publishes `OrderStatusUpdatedEvent`.
+
 ### Cancel Order
 
 ```bash
 curl -X POST http://127.0.0.1:8000/orders/1/cancel
 ```
+
+This updates the write model and publishes `OrderCancelledEvent`.
 
 ### Get Order by ID
 
@@ -187,14 +189,41 @@ curl -X POST http://127.0.0.1:8000/orders/1/cancel
 curl http://127.0.0.1:8000/orders/1
 ```
 
+This reads from the projected read model.
+
 ### List Orders by Customer
 
 ```bash
 curl http://127.0.0.1:8000/customers/101/orders
 ```
 
-## Why CQRS?
+This reads from the projected read model.
 
-CQRS separates the responsibility of changing data from reading data. In this project, commands handle business actions such as creating, updating, and cancelling orders, while queries handle read-only operations such as fetching order details.
+### Inspect Published Events
 
-This improves code organization, makes the system easier to extend, and keeps business logic focused inside dedicated handlers.
+```bash
+curl http://127.0.0.1:8000/broker/events
+```
+
+Example response:
+
+```json
+[
+  {
+    "topic": "order-events",
+    "event_type": "OrderCreatedEvent",
+    "payload": {
+      "order_id": 1,
+      "customer_id": 101,
+      "items": ["Laptop", "Mouse"],
+      "status": "CREATED"
+    }
+  }
+]
+```
+
+## Why Add an Event Bus?
+
+The event bus allows command handlers to publish business events without directly knowing who will consume them. The message broker stores and delivers those events to subscribers.
+
+In this project, the `OrderProjectionHandler` subscribes to order events and updates the read model. This shows how a real system could use Kafka, RabbitMQ, or Redis Streams to keep write and read models synchronized.
